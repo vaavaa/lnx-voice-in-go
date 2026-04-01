@@ -41,7 +41,7 @@ func Process(samples []float32) string {
 
 	ctx, err := ensureCtxLocked()
 	if err != nil {
-		return fmt.Sprintf("Ошибка Whisper: %v", err)
+		return fmt.Sprintf("Whisper error: %v", err)
 	}
 
 	params := C.whisper_full_default_params(C.WHISPER_SAMPLING_GREEDY)
@@ -62,7 +62,7 @@ func Process(samples []float32) string {
 	n := C.int(len(samples))
 	rc := C.whisper_full(ctx, params, pcm, n)
 	if rc != 0 {
-		return fmt.Sprintf("Ошибка whisper_full (код %d)", int(rc))
+		return fmt.Sprintf("Whisper error: whisper_full returned code %d", int(rc))
 	}
 
 	nSeg := int(C.whisper_full_n_segments(ctx))
@@ -100,11 +100,11 @@ func ensureCtxLocked() (*C.struct_whisper_context, error) {
 
 	ctx := C.whisper_init_from_file_with_params(cpath, cparams)
 	if ctx == nil {
-		whisperInitErr = fmt.Errorf("не удалось загрузить модель %q (файл, права, CUDA/библиотеки)", path)
+		whisperInitErr = fmt.Errorf("failed to load model %q (file, permissions, CUDA/libs)", path)
 		return nil, whisperInitErr
 	}
 	whisperCtx = ctx
-	fmt.Fprintf(os.Stderr, "whisper: модель загружена: %s (use_gpu=%v)\n", path, bool(cparams.use_gpu))
+	fmt.Fprintf(os.Stderr, "whisper: model loaded: %s (use_gpu=%v)\n", path, bool(cparams.use_gpu))
 	return whisperCtx, nil
 }
 
@@ -120,9 +120,9 @@ func CheckCUDA() {
 
 	ctx := C.whisper_init_from_file_with_params(modelPath, params)
 	if ctx == nil {
-		fmt.Println("❌ Ошибка: Не удалось инициализировать модель. Проверьте путь и CUDA драйверы.")
+		fmt.Println("❌ Error: failed to initialize model. Check model path and CUDA drivers.")
 	} else {
-		fmt.Println("✅ Успех: Модель загружена, GPU (CUDA) доступен!")
+		fmt.Println("✅ OK: model loaded, GPU (CUDA) is available.")
 		C.whisper_free(ctx)
 	}
 }

@@ -11,17 +11,25 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
+
+	"lnx-voice-in-go/assets"
 )
 
-const waveViewSize = 220
+const waveViewSize = 300
+
+// micIconSize — доля от области визуализации (~диаметр внутреннего диска с отступами от края круга).
+const micIconSizeRatio = 0.38
 
 type Visualizer struct {
-	window      fyne.Window
-	wave        *canvas.Raster
-	resultLabel *widget.Label
-	recordBtn   *widget.Button
-	onRecord    func()
+	window        fyne.Window
+	wave          *canvas.Raster
+	micHot        *canvas.Circle    // полупрозрачный красный «микрофон включён», пульс от уровня
+	micPileAnchor *canvas.Rectangle // задаёт MinSize стека иконки + подсветки (у Circle нет SetMinSize)
+	recDot        *canvas.Circle    // фиксированная точка в углу: идёт запись
+	onRecord      func()
 
 	mu        sync.Mutex
 	curVol    float32
@@ -32,11 +40,18 @@ type Visualizer struct {
 }
 
 func NewOverlay() *Visualizer {
-	myApp := app.New()
-	w := myApp.NewWindow("Voice Input")
+	myApp := app.NewWithID("io.github.lnx-voice-in-go")
 
+	var w fyne.Window
+	if drv, ok := myApp.Driver().(desktop.Driver); ok {
+		w = drv.CreateSplashWindow()
+	} else {
+		w = myApp.NewWindow("Voice Input")
+		w.SetPadded(false)
+	}
 	w.SetFixedSize(true)
-	w.Resize(fyne.NewSize(280, 420))
+	w.Resize(fyne.NewSize(waveViewSize, waveViewSize))
+	w.SetTitle("Voice Input")
 
 	v := &Visualizer{window: w}
 
@@ -47,24 +62,37 @@ func NewOverlay() *Visualizer {
 	v.wave.SetMinSize(fyne.NewSize(waveViewSize, waveViewSize))
 	v.wave.Resize(fyne.NewSize(waveViewSize, waveViewSize))
 
-	v.resultLabel = widget.NewLabel("Готов к работе...")
-	v.resultLabel.Wrapping = fyne.TextWrapWord
-	v.resultLabel.Alignment = fyne.TextAlignCenter
-
-	resultScroll := container.NewScroll(v.resultLabel)
-	resultScroll.SetMinSize(fyne.NewSize(260, 150))
-
-	v.recordBtn = widget.NewButton("Начать запись", func() {
+	micRes := fyne.NewStaticResource("mic_icon.png", assets.MicIconPNG)
+	iconSide := float32(waveViewSize) * micIconSizeRatio
+	micBtn := widget.NewButtonWithIcon("", micRes, func() {
 		if v.onRecord != nil {
 			v.onRecord()
 		}
 	})
+	micBtn.Importance = widget.LowImportance
 
-	w.SetContent(container.NewVBox(
-		container.NewCenter(v.wave),
-		container.NewPadded(resultScroll),
-		container.NewPadded(v.recordBtn),
-	))
+	hotD := iconSide * 1.18
+	v.micPileAnchor = canvas.NewRectangle(color.NRGBA{A: 0})
+	v.micPileAnchor.StrokeWidth = 0
+	v.micPileAnchor.SetMinSize(fyne.NewSize(hotD, hotD))
+	v.micPileAnchor.Resize(fyne.NewSize(hotD, hotD))
+
+	v.micHot = canvas.NewCircle(color.RGBA{R: 225, G: 40, B: 58, A: 78})
+	v.micHot.StrokeWidth = 0
+	v.micHot.Resize(fyne.NewSize(hotD, hotD))
+
+	micPile := container.NewStack(v.micPileAnchor, v.micHot, micBtn)
+
+	v.recDot = canvas.NewCircle(color.RGBA{R: 255, G: 72, B: 88, A: 255})
+	v.recDot.StrokeWidth = 0
+	v.recDot.Resize(fyne.NewSize(13, 13))
+	v.recDot.Hide()
+
+	recTop := container.NewHBox(layout.NewSpacer(), v.recDot)
+	micBlock := container.NewBorder(recTop, nil, nil, nil, micPile)
+	waveStack := container.NewStack(v.wave, container.NewCenter(micBlock))
+
+	w.SetContent(waveStack)
 	return v
 }
 
@@ -73,14 +101,15 @@ func (v *Visualizer) SetOnRecordToggle(fn func()) {
 }
 
 func (v *Visualizer) SetRecording(active bool) {
-	if active {
-		v.recordBtn.SetText("Остановить (F12)")
-		v.recordBtn.Importance = widget.DangerImportance
-	} else {
-		v.recordBtn.SetText("Начать запись (F12)")
-		v.recordBtn.Importance = widget.MediumImportance
+	if v.recDot == nil {
+		return
 	}
-	v.recordBtn.Refresh()
+	if active {
+		v.recDot.Show()
+	} else {
+		v.recDot.Hide()
+	}
+	v.recDot.Refresh()
 }
 
 func (v *Visualizer) Show() {
@@ -121,9 +150,23 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 
 	innerR := minDim * 0.30
 	baseR := minDim * 0.38
+	innerSoft := math.Max(2.8, minDim*0.034) // до волны: нужен для предела амплитуды основной линии
+
 	// Внешнее «эхо» — чуть дальше от центра, та же форма с отстающими vol/phase
 	baseREcho := baseR + minDim*0.048
-	amp := minDim * (0.055 + float64(vol)*0.42)
+	// Основная волна: положе, чем раньше (меньше «крутизна» пиков), плюс жёсткий потолок —
+	// иначе при sin=-1 кольцо уходит под мягкий край диска и выглядит обрезанным.
+	ampMainRaw := minDim * (0.048 + float64(vol)*0.30) * 0.88
+	minRWave := innerR + innerSoft + minDim*0.024 // зазор от внешнего края мягкого диска
+	ampCap := baseR - minRWave
+	if ampCap < 0 {
+		ampCap = 0
+	}
+	ampMain := ampMainRaw
+	if ampMain > ampCap {
+		ampMain = ampCap
+	}
+	// Эхо без изменения характера
 	ampEcho := minDim * (0.055 + float64(evol)*0.42)
 	cycles := math.Round(2.5 + float64(vol)*12.0)
 	if cycles < 2 {
@@ -138,6 +181,16 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 	hwMain := hw*1.35 + 3.2
 	hwEcho := hw*1.25 + 1.5
 
+	// Не даём волне вылезти за край квадрата растра (обрезание по бокам).
+	edgePad := minDim * 0.035
+	maxR := minDim*0.5 - edgePad
+	if baseR+ampMain+hwMain > maxR {
+		ampMain = math.Max(0, maxR-baseR-hwMain)
+	}
+	if baseREcho+ampEcho+hwEcho > maxR {
+		ampEcho = math.Max(0, maxR-baseREcho-hwEcho)
+	}
+
 	innerFill := color.RGBA{R: 15, G: 95, B: 190, A: 255}
 	innerEdge := color.RGBA{R: 40, G: 140, B: 235, A: 255}
 	waveHi := color.RGBA{
@@ -146,9 +199,9 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 		B: 255,
 		A: 255,
 	}
-	// Непрозрачный фон всю область — иначе на части тем прозрачность «съедает» картинку.
-	panelBG := color.RGBA{R: 22, G: 48, B: 88, A: 255}
-	ringBG := color.RGBA{R: 28, G: 72, B: 130, A: 255}
+	// Вне «орба» — прозрачно (композитор покажет рабочий стол, если окно с альфой поддерживается).
+	panelBG := color.RGBA{A: 0}
+	ringBG := color.RGBA{R: 28, G: 72, B: 130, A: 210}
 
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
@@ -164,58 +217,75 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 			if th < 0 {
 				th += 2 * math.Pi
 			}
-			rWave := baseR + amp*math.Sin(cycles*th+phase)
+			rWave := baseR + ampMain*math.Sin(cycles*th+phase)
 			rEcho := baseREcho + ampEcho*math.Sin(cyclesEcho*th+ephase)
 
-			col := panelBG
-
-			switch {
-			case dist < innerR-1:
-				col = innerFill
-			case dist < innerR+1:
-				t := float32(dist - (innerR - 1))
-				col = lerpRGBA(innerFill, innerEdge, t)
-			default:
-				margin := math.Max(hwMain, hwEcho) * 2.6
-				lim := math.Max(baseR+amp, baseREcho+ampEcho) + margin
-				if dist < lim {
-					col = ringBG
-				}
-				// Эхо: мягкий край через smoothstep
-				ddE := math.Abs(dist - rEcho)
-				if te := smoothRingMask(ddE, hwEcho) * 0.62; te > 0 {
-					echoC := color.RGBA{R: 120, G: 210, B: 255, A: 105}
-					col = lerpRGBA(col, echoC, te)
-				}
-				// Основная волна — такая же расплывчатая линия, чуть ярче и уже по max opacity
-				dd := math.Abs(dist - rWave)
-				if tm := smoothRingMask(dd, hwMain) * 0.92; tm > 0 {
-					var stroke color.RGBA
-					if dist < rWave {
-						stroke = lerpRGBA(innerEdge, waveHi, 0.82)
-					} else {
-						stroke = waveHi
-						if stroke.A > 245 {
-							stroke.A = 245
-						}
-					}
-					col = lerpRGBA(col, stroke, tm)
-				}
+			// Центр диска — сплошная заливка; волны под него не рисуем
+			if dist < innerR-innerSoft {
+				img.Set(x, y, innerFill)
+				continue
 			}
+
+			col := panelBG
+			if dist < innerR {
+				// из центра к номинальному радиусу: fill → ободок
+				t := float32(smoothstep01((dist - (innerR - innerSoft)) / innerSoft))
+				col = lerpRGBA(innerFill, innerEdge, t)
+			} else if dist < innerR+innerSoft {
+				// наружу от края: ободок → фон кольца
+				t := float32(smoothstep01((dist - innerR) / innerSoft))
+				col = lerpRGBA(innerEdge, ringBG, t)
+			}
+
+			margin := math.Max(hwMain, hwEcho) * 2.6
+			lim := math.Max(baseR+ampMain, baseREcho+ampEcho) + margin
+			if dist >= innerR+innerSoft && dist < lim {
+				col = ringBG
+			}
+
+			// Эхо
+			ddE := math.Abs(dist - rEcho)
+			if te := smoothRingMask(ddE, hwEcho) * 0.62; te > 0 {
+				echoC := color.RGBA{R: 120, G: 210, B: 255, A: 105}
+				col = lerpRGBA(col, echoC, te)
+			}
+			// Основная волна
+			dd := math.Abs(dist - rWave)
+			if tm := smoothRingMask(dd, hwMain) * 0.92; tm > 0 {
+				var stroke color.RGBA
+				if dist < rWave {
+					stroke = lerpRGBA(innerEdge, waveHi, 0.82)
+				} else {
+					stroke = waveHi
+					if stroke.A > 245 {
+						stroke.A = 245
+					}
+				}
+				col = lerpRGBA(col, stroke, tm)
+			}
+
 			img.Set(x, y, col)
 		}
 	}
 	return img
 }
 
-// smoothRingMask: 1 на самой линии, 0 на краю полосы halfWidth — без «лесенки» (smoothstep).
+func smoothstep01(u float64) float64 {
+	if u <= 0 {
+		return 0
+	}
+	if u >= 1 {
+		return 1
+	}
+	return u * u * (3 - 2*u)
+}
+
+// smoothRingMask: 1 на самой линии, 0 на краю полосы halfWidth — без «лесенки».
 func smoothRingMask(dd, halfWidth float64) float32 {
 	if halfWidth <= 1e-6 || dd >= halfWidth {
 		return 0
 	}
-	u := dd / halfWidth
-	u = u * u * (3 - 2*u)
-	return float32(1 - u)
+	return float32(1 - smoothstep01(dd/halfWidth))
 }
 
 func lerpRGBA(a, b color.RGBA, t float32) color.RGBA {
@@ -257,19 +327,48 @@ func (v *Visualizer) UpdateWave(volume float32) {
 
 	v.mu.Unlock()
 	v.wave.Refresh()
+	v.updateMicHotPulse(vol)
+}
+
+// updateMicHotPulse — красная подсветка под иконкой: яркость и размер от громкости (0 = тихий «мик вкл»).
+func (v *Visualizer) updateMicHotPulse(vol float32) {
+	if v.micHot == nil {
+		return
+	}
+	iconSide := float32(waveViewSize) * micIconSizeRatio
+	baseD := iconSide * 1.18
+	pulse := vol * 26
+	d := baseD + pulse
+	alpha := uint8(72 + vol*175)
+	if alpha > 235 {
+		alpha = 235
+	}
+	v.micHot.FillColor = color.RGBA{R: 225, G: 38, B: 58, A: alpha}
+	sz := fyne.NewSize(d, d)
+	if v.micPileAnchor != nil {
+		v.micPileAnchor.SetMinSize(sz)
+		v.micPileAnchor.Resize(sz)
+	}
+	v.micHot.Resize(sz)
+	v.micHot.Refresh()
 }
 
 // UpdateState обновляет индикатор уровня и заголовок окна.
 func (v *Visualizer) UpdateState(volume float32, secondsLeft float64) {
 	v.UpdateWave(volume)
 	if secondsLeft > 0 {
-		v.window.SetTitle(fmt.Sprintf("Voice Input — %.0f с", secondsLeft))
+		v.window.SetTitle(fmt.Sprintf("Voice Input — %.0f s", secondsLeft))
 	} else {
 		v.window.SetTitle("Voice Input")
 	}
 }
 
-func (v *Visualizer) SetResultText(s string) {
-	v.resultLabel.SetText(s)
-	v.resultLabel.Refresh()
+// SetClipboardRecognized кладёт в системный буфер только успешный текст распознавания (вызывать из любого потока).
+func (v *Visualizer) SetClipboardRecognized(text string) {
+	if text == "" {
+		return
+	}
+	fyne.Do(func() {
+		v.window.Clipboard().SetContent(text)
+	})
 }

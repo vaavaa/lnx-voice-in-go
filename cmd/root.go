@@ -33,7 +33,7 @@ import (
 
 var whisperSelftestCmd = &cobra.Command{
 	Use:   "whisper-selftest",
-	Short: "Проверка whisper: вывод системной информации и загрузка модели",
+	Short: "Whisper self-test: print system info and load the model",
 	Run: func(cmd *cobra.Command, args []string) {
 		engine.CheckCUDA()
 	},
@@ -52,7 +52,7 @@ to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		rec, err := audio.NewRecorder()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "микрофон недоступен: %v\n", err)
+			fmt.Fprintf(os.Stderr, "microphone unavailable: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -79,39 +79,34 @@ to quickly create a Cobra application.`,
 
 				rec.BeginSession()
 				vis.SetRecording(true)
-				vis.SetResultText("Идёт запись…")
-				fmt.Println("Запись пошла...")
+				fmt.Println("Recording started...")
 			} else {
 				sess.mu.Lock()
 				sess.recording = false
 				sess.mu.Unlock()
 
 				vis.SetRecording(false)
-				vis.SetResultText("Обработка…")
-				fmt.Println("Обработка...")
+				fmt.Println("Processing...")
 
 				go func() {
 					samples := rec.EndSession()
 					text := engine.Process(samples)
 
-					var forDisplay string
 					if len(samples) == 0 {
-						forDisplay = "Нет аудио для распознавания."
-						fmt.Fprintln(os.Stderr, "голос: в буфере 0 сэмплов — запись слишком короткая или микрофон не пишет.")
-					} else if strings.HasPrefix(text, "Ошибка") {
-						forDisplay = text
-						fmt.Fprintln(os.Stderr, "голос:", text)
-					} else if text == "" {
-						forDisplay = "Текст не распознан (тишина, шум, очень короткая фраза или неверный язык). Попробуйте WHISPER_LANG=ru."
-						fmt.Fprintf(os.Stderr, "голос: whisper вернул пустую строку (~%.2f с PCM). Язык: см. WHISPER_LANG.\n", float64(len(samples))/16000)
-					} else {
-						forDisplay = text
-						fmt.Fprintf(os.Stderr, "голос: распознано %q\n", text)
+						fmt.Fprintln(os.Stderr, "voice: buffer has 0 samples — recording too short or microphone not capturing.")
+						return
+					}
+					if strings.HasPrefix(text, "Whisper error:") {
+						fmt.Fprintln(os.Stderr, "voice:", text)
+						return
+					}
+					if text == "" {
+						fmt.Fprintf(os.Stderr, "voice: whisper returned empty text (~%.2f s PCM). Language: see WHISPER_LANG.\n", float64(len(samples))/16000)
+						return
 					}
 
-					fyne.Do(func() {
-						vis.SetResultText(forDisplay)
-					})
+					fmt.Fprintf(os.Stderr, "voice: transcribed %q\n", text)
+					vis.SetClipboardRecognized(text)
 					input.Type(text)
 				}()
 			}
