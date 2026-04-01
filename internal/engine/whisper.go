@@ -87,7 +87,7 @@ func ensureCtxLocked() (*C.struct_whisper_context, error) {
 
 	path := os.Getenv("WHISPER_MODEL")
 	if path == "" {
-		path = "models/ggml-small.bin"
+		path = "models/ggml-medium.bin"
 	}
 
 	cpath := C.CString(path)

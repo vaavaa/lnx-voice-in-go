@@ -21,7 +21,37 @@ import (
 const waveViewSize = 300
 
 // micIconSize — доля от области визуализации (~диаметр внутреннего диска с отступами от края круга).
-const micIconSizeRatio = 0.38
+const micIconSizeRatio = 0.285
+
+// micTap — PNG микрофона с обработкой нажатия без оформления кнопки (нет hover/pressed у кнопки).
+type micTap struct {
+	widget.BaseWidget
+	img   *canvas.Image
+	onTap func()
+}
+
+func newMicTap(res fyne.Resource, size fyne.Size, onTap func()) *micTap {
+	m := &micTap{
+		img:   canvas.NewImageFromResource(res),
+		onTap: onTap,
+	}
+	m.img.FillMode = canvas.ImageFillContain
+	m.img.SetMinSize(size)
+	m.ExtendBaseWidget(m)
+	return m
+}
+
+func (m *micTap) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(m.img)
+}
+
+func (m *micTap) Tapped(_ *fyne.PointEvent) {
+	if m.onTap != nil {
+		m.onTap()
+	}
+}
+
+var _ fyne.Tappable = (*micTap)(nil)
 
 type Visualizer struct {
 	window        fyne.Window
@@ -64,12 +94,12 @@ func NewOverlay() *Visualizer {
 
 	micRes := fyne.NewStaticResource("mic_icon.png", assets.MicIconPNG)
 	iconSide := float32(waveViewSize) * micIconSizeRatio
-	micBtn := widget.NewButtonWithIcon("", micRes, func() {
+	iconSz := fyne.NewSize(iconSide, iconSide)
+	micTapW := newMicTap(micRes, iconSz, func() {
 		if v.onRecord != nil {
 			v.onRecord()
 		}
 	})
-	micBtn.Importance = widget.LowImportance
 
 	hotD := iconSide * 1.18
 	v.micPileAnchor = canvas.NewRectangle(color.NRGBA{A: 0})
@@ -81,7 +111,7 @@ func NewOverlay() *Visualizer {
 	v.micHot.StrokeWidth = 0
 	v.micHot.Resize(fyne.NewSize(hotD, hotD))
 
-	micPile := container.NewStack(v.micPileAnchor, v.micHot, micBtn)
+	micPile := container.NewStack(v.micPileAnchor, v.micHot, micTapW)
 
 	v.recDot = canvas.NewCircle(color.RGBA{R: 255, G: 72, B: 88, A: 255})
 	v.recDot.StrokeWidth = 0
@@ -150,7 +180,8 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 
 	innerR := minDim * 0.30
 	baseR := minDim * 0.38
-	innerSoft := math.Max(2.8, minDim*0.034) // до волны: нужен для предела амплитуды основной линии
+	// Широкий мягкий край диска — как у линий волны (smoothRingMask), без ступенек по пикселям.
+	innerSoft := math.Max(5.5, minDim*0.052)
 
 	// Внешнее «эхо» — чуть дальше от центра, та же форма с отстающими vol/phase
 	baseREcho := baseR + minDim*0.048
@@ -229,11 +260,11 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 			col := panelBG
 			if dist < innerR {
 				// из центра к номинальному радиусу: fill → ободок
-				t := float32(smoothstep01((dist - (innerR - innerSoft)) / innerSoft))
+				t := float32(smootherstep01((dist - (innerR - innerSoft)) / innerSoft))
 				col = lerpRGBA(innerFill, innerEdge, t)
 			} else if dist < innerR+innerSoft {
 				// наружу от края: ободок → фон кольца
-				t := float32(smoothstep01((dist - innerR) / innerSoft))
+				t := float32(smootherstep01((dist - innerR) / innerSoft))
 				col = lerpRGBA(innerEdge, ringBG, t)
 			}
 
@@ -264,6 +295,16 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 				col = lerpRGBA(col, stroke, tm)
 			}
 
+			// Внешний край орба — плавно в прозрачность, без резкого кольца на lim.
+			outerW := math.Max(6.0, minDim*0.046)
+			if dist > lim-outerW {
+				u := (dist - (lim - outerW)) / (outerW * 1.38)
+				if u > 1 {
+					u = 1
+				}
+				col = lerpRGBA(panelBG, col, float32(1-smoothstep01(u)))
+			}
+
 			img.Set(x, y, col)
 		}
 	}
@@ -278,6 +319,17 @@ func smoothstep01(u float64) float64 {
 		return 1
 	}
 	return u * u * (3 - 2*u)
+}
+
+// smootherstep01 — более плавный S-изгиб (Perlin), для мягких заливок как у контуров волны.
+func smootherstep01(u float64) float64 {
+	if u <= 0 {
+		return 0
+	}
+	if u >= 1 {
+		return 1
+	}
+	return u * u * u * (u*(u*6-15) + 10)
 }
 
 // smoothRingMask: 1 на самой линии, 0 на краю полосы halfWidth — без «лесенки».
