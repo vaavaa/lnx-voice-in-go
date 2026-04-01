@@ -1,0 +1,42 @@
+# --- Go ---
+*.exe
+*.exe-
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+vendor/
+
+# --- Сборка этого репозитория ---
+lnx-voice-in-go
+v-input
+
+# --- Сборка whisper.cpp (cmake); сабмодуль остаётся, build — нет ---
+third_party/whisper/build/
+
+# --- Веса Whisper (GGML); не коммитим гигабайты ---
+models/*.bin
+models/*.ggml*
+
+# --- Локальные медиа для отладки (при необходимости раскомментируйте) ---
+# *.wav
+# *.mp3
+
+# --- Окружение и секреты ---
+.env
+.env.*
+!.env.example
+
+# --- IDE / ОС ---
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# --- Прочее ---
+*.log
+dist/
