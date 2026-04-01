@@ -1,0 +1,15 @@
+model:
+  path: "models/ggml-small.bin"
+  type: "small"
+  lang: "auto"
+  use_gpu: true
+
+audio:
+  sample_rate: 16000
+  max_duration_sec: 60
+  hotkey: "F12"
+
+ui:
+  theme: "dark"
+  main_color: "#0096FF"
+  show_result: true

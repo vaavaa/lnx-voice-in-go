@@ -1,24 +1,33 @@
 # lnx-voice-in-go
 
-**Говорите — текст появляется там, где у вас курсор.** Этот проект превращает Linux-рабочий стол в точку, где речь быстро и **без облака** превращается в обычный набор символов: диктуйте в чат, документ, IDE или форму в браузере. Распознавание идёт **локально** на базе **whisper.cpp**, при желании с ускорением **CUDA**, так что голос не уходит на чужие серверы, а скорость зависит от вашего железа и выбранной модели. Сверху — лёгкое окно **Fyne**: уровень микрофона, старт/стоп записи и результат без лишнего «сказочного» интерфейса.
+**Speak where you type — privately, on your machine.** A lean Linux utility that runs **Whisper** locally (optionally **GPU-accelerated** via CUDA), shows a small **Fyne** overlay, and injects transcribed text into whatever window is focused—no cloud API, just microphone, model, and keyboard injection.
 
-**Speak where you type — privately, on your machine.** A lean Linux utility that runs **Whisper** locally (optionally **GPU-accelerated**), shows a small overlay, and injects transcribed text into whatever window is focused—no subscription API, just mic, model, and keyboard injection.
-
-## Интерфейс / What it looks like
-
-Если вы просто открыли репозиторий и хотите понять, **что увидит пользователь на экране**: это не «полноэкранное приложение», а компактное **окно-оверлей** (Fyne) поверх других программ. На скриншоте ниже — типичный вид во время работы: индикатор уровня с микрофона, управление записью и область, куда попадает распознанный текст. Именно из этого окна текст затем **подставляется в активное поле ввода** (чат, документ, форма в браузере и т.д.) там, где у вас курсор.
-
-**Browsing the repo?** The app is a small **desktop overlay**, not a full-screen program. The screenshot shows the usual layout while dictating: mic level, recording controls, and the transcription preview. From there, transcribed text is **injected into the focused input** wherever your cursor is (chat, editor, browser form, etc.).
-
-![lnx-voice-in-go: оверлей с уровнем микрофона, записью и распознанным текстом / overlay with mic level, recording, and transcription](assets/images/form-screenshot.png)
+Full technical write-ups: **[English](README.en.md)** · **[Русский](README.ru.md)** (stack, build, licensing).
 
 ---
 
-## Документация / Documentation
+## What it looks like
 
-| | Полное техническое описание |
-|---|-----------------------------|
-| **Русский** | [README.ru.md](README.ru.md) |
-| **English** | [README.en.md](README.en.md) |
+The app is a small **desktop overlay**, not a full-screen program. The screenshot shows the usual layout while dictating: mic level, recording controls, and the live visualization. Transcribed text is **injected into the focused input** (chat, editor, browser form, etc.) where your cursor is.
 
-Там: стек, зависимости, сборка, модели, переменные окружения, лицензия.
+![lnx-voice-in-go overlay: mic level, recording, and rim visualization](assets/images/form-screenshot.png)
+
+---
+
+## Configuration
+
+Runtime options live in **`config.yml`** or **`config.yaml`** at the repo root (or under `~/.voice-input` / `~/.config/lnx-voice-in-go`). Load a specific file with:
+
+```bash
+./lnx-voice-in-go --config /path/to/config.yaml
+```
+
+The app uses **Viper**: values from the file can be overridden by **`VOICE_`** environment variables (nested YAML keys map to names like `VOICE_MODEL_PATH`, `VOICE_AUDIO_SAMPLE_RATE`, `VOICE_UI_THEME`, …). After that, legacy **`WHISPER_MODEL`**, **`WHISPER_LANG`**, and **`WHISPER_USE_GPU`** still override the **model** block.
+
+| Block | Fields (summary) |
+|--------|------------------|
+| **model** | `path`, `type` (hint), `lang` (e.g. `auto`, `en`, `ru`), `use_gpu` |
+| **audio** | `sample_rate` (16 kHz is what Whisper expects), `max_duration_sec`, `hotkey` (e.g. `F12`; gohook key names) |
+| **ui** | `theme` (`dark` / `light`), `main_color` (hex accent), `show_result` (copy transcript to clipboard) |
+
+See **`config.yml`** in the repo for a full example. Details: [README.en.md](README.en.md) · [README.ru.md](README.ru.md).

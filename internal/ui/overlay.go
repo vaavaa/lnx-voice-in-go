@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"strings"
 	"sync"
 
 	"fyne.io/fyne/v2"
@@ -13,17 +14,19 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"lnx-voice-in-go/assets"
+	"lnx-voice-in-go/internal/config"
 )
 
 const waveViewSize = 300
 
-// micIconSize — доля от области визуализации (~диаметр внутреннего диска с отступами от края круга).
+// micIconSize ratio of visualization area (~inner disk diameter with margin from the rim).
 const micIconSizeRatio = 0.285
 
-// micTap — PNG микрофона с обработкой нажатия без оформления кнопки (нет hover/pressed у кнопки).
+// micTap: mic PNG with tap handling without full button chrome (no button hover/pressed styling).
 type micTap struct {
 	widget.BaseWidget
 	img   *canvas.Image
@@ -56,21 +59,33 @@ var _ fyne.Tappable = (*micTap)(nil)
 type Visualizer struct {
 	window        fyne.Window
 	wave          *canvas.Raster
-	micHot        *canvas.Circle    // полупрозрачный красный «микрофон включён», пульс от уровня
-	micPileAnchor *canvas.Rectangle // задаёт MinSize стека иконки + подсветки (у Circle нет SetMinSize)
-	recDot        *canvas.Circle    // фиксированная точка в углу: идёт запись
+	micHot        *canvas.Circle    // semi-transparent red “mic on” halo; brightness/size from level
+	micPileAnchor *canvas.Rectangle // sets stack MinSize for icon + halo (Circle has no SetMinSize)
+	recDot        *canvas.Circle    // fixed corner dot while recording
 	onRecord      func()
+
+	innerFill  color.RGBA
+	innerEdge  color.RGBA
+	waveHiMid  color.RGBA
+	ringBGTint color.RGBA
 
 	mu        sync.Mutex
 	curVol    float32
 	wavePhase float64
-	// Эхо: сглаженные копии — «догоняют» основной слой с задержкой
+	// Echo layer: smoothed copies that lag the main layer
 	echoVol   float32
 	echoPhase float64
 }
 
 func NewOverlay() *Visualizer {
 	myApp := app.NewWithID("io.github.lnx-voice-in-go")
+
+	switch strings.ToLower(strings.TrimSpace(config.AppConfig.UI.Theme)) {
+	case "light":
+		myApp.Settings().SetTheme(theme.LightTheme())
+	default:
+		myApp.Settings().SetTheme(theme.DarkTheme())
+	}
 
 	var w fyne.Window
 	if drv, ok := myApp.Driver().(desktop.Driver); ok {
@@ -85,10 +100,16 @@ func NewOverlay() *Visualizer {
 
 	v := &Visualizer{window: w}
 
+	ac, ok := uiParseHexRGB(config.AppConfig.UI.MainColor)
+	if !ok {
+		ac = color.RGBA{R: 0, G: 150, B: 255, A: 255}
+	}
+	v.innerFill, v.innerEdge, v.waveHiMid, v.ringBGTint = uiAccentPalette(ac)
+
 	v.wave = canvas.NewRaster(func(wi, hi int) image.Image {
 		return v.micWaveImage(wi, hi)
 	})
-	// Иначе centerLayout даст объекту размер MinSize() = 1×1 (дефолт у Raster) — ничего не видно.
+	// Otherwise centerLayout keeps Raster at default MinSize 1×1 and nothing draws.
 	v.wave.SetMinSize(fyne.NewSize(waveViewSize, waveViewSize))
 	v.wave.Resize(fyne.NewSize(waveViewSize, waveViewSize))
 
@@ -154,7 +175,7 @@ func (v *Visualizer) RunApp() {
 	v.window.ShowAndRun()
 }
 
-// micWaveImage: спокойный центральный диск и волна по контуру (частота и «высота» от громкости).
+// micWaveImage: calm central disk and rim wave (frequency and excursion from volume).
 func (v *Visualizer) micWaveImage(w, h int) image.Image {
 	v.mu.Lock()
 	vol := v.curVol
@@ -180,15 +201,14 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 
 	innerR := minDim * 0.30
 	baseR := minDim * 0.38
-	// Широкий мягкий край диска — как у линий волны (smoothRingMask), без ступенек по пикселям.
+	// Wide soft disk edge like wave strokes (smoothRingMask), no pixel stair-steps.
 	innerSoft := math.Max(5.5, minDim*0.052)
 
-	// Внешнее «эхо» — чуть дальше от центра, та же форма с отстающими vol/phase
+	// Outer echo ring: slightly farther out, same shape with lagging vol/phase
 	baseREcho := baseR + minDim*0.048
-	// Основная волна: положе, чем раньше (меньше «крутизна» пиков), плюс жёсткий потолок —
-	// иначе при sin=-1 кольцо уходит под мягкий край диска и выглядит обрезанным.
+	// Main wave: shallower peaks plus hard cap so at sin=-1 the ring does not clip under the soft disk edge.
 	ampMainRaw := minDim * (0.048 + float64(vol)*0.30) * 0.88
-	minRWave := innerR + innerSoft + minDim*0.024 // зазор от внешнего края мягкого диска
+	minRWave := innerR + innerSoft + minDim*0.024 // gap past outer soft disk edge
 	ampCap := baseR - minRWave
 	if ampCap < 0 {
 		ampCap = 0
@@ -197,7 +217,7 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 	if ampMain > ampCap {
 		ampMain = ampCap
 	}
-	// Эхо без изменения характера
+	// Echo keeps the same character as main wave
 	ampEcho := minDim * (0.055 + float64(evol)*0.42)
 	cycles := math.Round(2.5 + float64(vol)*12.0)
 	if cycles < 2 {
@@ -208,11 +228,11 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 		cyclesEcho = 2
 	}
 	hw := 2.5 + float64(vol)*7.00
-	// Ширина мягкого края: основная линия — как эхо, расплывчатая (не резкий dd/hw).
+	// Soft stroke width: main line softer than raw dd/hw (blurrier edge).
 	hwMain := hw*1.35 + 3.2
 	hwEcho := hw*1.25 + 1.5
 
-	// Не даём волне вылезти за край квадрата растра (обрезание по бокам).
+	// Keep wave inside raster bounds (no side clipping artifact).
 	edgePad := minDim * 0.035
 	maxR := minDim*0.5 - edgePad
 	if baseR+ampMain+hwMain > maxR {
@@ -222,17 +242,17 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 		ampEcho = math.Max(0, maxR-baseREcho-hwEcho)
 	}
 
-	innerFill := color.RGBA{R: 15, G: 95, B: 190, A: 255}
-	innerEdge := color.RGBA{R: 40, G: 140, B: 235, A: 255}
+	innerFill := v.innerFill
+	innerEdge := v.innerEdge
 	waveHi := color.RGBA{
-		R: uint8(90 + 165*vol),
-		G: uint8(180 + 75*vol),
-		B: 255,
+		R: uint8(math.Min(255, float64(v.waveHiMid.R)*(0.55+0.45*float64(vol)))),
+		G: uint8(math.Min(255, float64(v.waveHiMid.G)*(0.55+0.45*float64(vol)))),
+		B: uint8(math.Min(255, float64(v.waveHiMid.B)*(0.62+0.38*float64(vol)))),
 		A: 255,
 	}
-	// Вне «орба» — прозрачно (композитор покажет рабочий стол, если окно с альфой поддерживается).
+	// Outside orb: transparent (compositor shows desktop if window alpha is supported).
 	panelBG := color.RGBA{A: 0}
-	ringBG := color.RGBA{R: 28, G: 72, B: 130, A: 210}
+	ringBG := v.ringBGTint
 
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
@@ -243,7 +263,7 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 				img.Set(x, y, innerFill)
 				continue
 			}
-			// Atan2 даёт [-π,π] — на ветви влево скачок π→-π рвёт волну; переводим в [0,2π).
+			// Atan2 is [-π,π]; branch cut would break the wave; use [0,2π).
 			th := math.Atan2(dy, dx)
 			if th < 0 {
 				th += 2 * math.Pi
@@ -251,7 +271,7 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 			rWave := baseR + ampMain*math.Sin(cycles*th+phase)
 			rEcho := baseREcho + ampEcho*math.Sin(cyclesEcho*th+ephase)
 
-			// Центр диска — сплошная заливка; волны под него не рисуем
+			// Solid disk center; skip wave math underneath
 			if dist < innerR-innerSoft {
 				img.Set(x, y, innerFill)
 				continue
@@ -259,11 +279,11 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 
 			col := panelBG
 			if dist < innerR {
-				// из центра к номинальному радиусу: fill → ободок
+				// Inward from center: fill → rim
 				t := float32(smootherstep01((dist - (innerR - innerSoft)) / innerSoft))
 				col = lerpRGBA(innerFill, innerEdge, t)
 			} else if dist < innerR+innerSoft {
-				// наружу от края: ободок → фон кольца
+				// Outward from rim: rim → ring background
 				t := float32(smootherstep01((dist - innerR) / innerSoft))
 				col = lerpRGBA(innerEdge, ringBG, t)
 			}
@@ -274,13 +294,13 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 				col = ringBG
 			}
 
-			// Эхо
+			// Echo stroke
 			ddE := math.Abs(dist - rEcho)
 			if te := smoothRingMask(ddE, hwEcho) * 0.62; te > 0 {
 				echoC := color.RGBA{R: 120, G: 210, B: 255, A: 105}
 				col = lerpRGBA(col, echoC, te)
 			}
-			// Основная волна
+			// Main wave stroke
 			dd := math.Abs(dist - rWave)
 			if tm := smoothRingMask(dd, hwMain) * 0.92; tm > 0 {
 				var stroke color.RGBA
@@ -295,7 +315,7 @@ func (v *Visualizer) micWaveImage(w, h int) image.Image {
 				col = lerpRGBA(col, stroke, tm)
 			}
 
-			// Внешний край орба — плавно в прозрачность, без резкого кольца на lim.
+			// Feather outer orb edge into transparency (no hard ring at lim).
 			outerW := math.Max(6.0, minDim*0.046)
 			if dist > lim-outerW {
 				u := (dist - (lim - outerW)) / (outerW * 1.38)
@@ -321,7 +341,7 @@ func smoothstep01(u float64) float64 {
 	return u * u * (3 - 2*u)
 }
 
-// smootherstep01 — более плавный S-изгиб (Perlin), для мягких заливок как у контуров волны.
+// smootherstep01: smoother S-curve (Perlin) for soft fills such as wave contours.
 func smootherstep01(u float64) float64 {
 	if u <= 0 {
 		return 0
@@ -332,7 +352,7 @@ func smootherstep01(u float64) float64 {
 	return u * u * u * (u*(u*6-15) + 10)
 }
 
-// smoothRingMask: 1 на самой линии, 0 на краю полосы halfWidth — без «лесенки».
+// smoothRingMask: 1 on the stroke center, 0 at halfWidth — avoids pixel ladder.
 func smoothRingMask(dd, halfWidth float64) float32 {
 	if halfWidth <= 1e-6 || dd >= halfWidth {
 		return 0
@@ -356,22 +376,22 @@ func lerpRGBA(a, b color.RGBA, t float32) color.RGBA {
 	}
 }
 
-// UpdateWave обновляет громкость и фазу бегущей волны по кругу.
+// UpdateWave updates volume-driven phase of the traveling rim wave.
 func (v *Visualizer) UpdateWave(volume float32) {
-	// RMS с микрофона обычно сильно ниже 1 — усиливаем и чуть приподнимаем «тихие» значения для заметной реакции.
+	// Mic RMS is usually far below 1 — gain up and lift quiet inputs for visible motion.
 	const gain = 4.2
 	vol := volume * gain
 	if vol > 1 {
 		vol = 1
 	}
-	// Кривая «резче»: средние уровни дают больший сдвиг, пики упираются в 1.
+	// Sharper curve: mid levels move more, peaks clamp at 1.
 	vol = float32(math.Pow(float64(vol), 0.72))
 
 	v.mu.Lock()
 	v.curVol = vol
 	v.wavePhase += 0.06 + float64(vol)*0.55
 
-	// Эхо догоняет громкость и фазу — меньше коэффициент = заметнее задержка
+	// Echo follows volume/phase; smaller coeff = more visible lag
 	const echoVolFollow = 0.11
 	const echoPhaseFollow = 0.09
 	v.echoVol += echoVolFollow * (v.curVol - v.echoVol)
@@ -382,7 +402,7 @@ func (v *Visualizer) UpdateWave(volume float32) {
 	v.updateMicHotPulse(vol)
 }
 
-// updateMicHotPulse — красная подсветка под иконкой: яркость и размер от громкости (0 = тихий «мик вкл»).
+// updateMicHotPulse: red halo under icon scales with volume (quiet = dim “mic on”).
 func (v *Visualizer) updateMicHotPulse(vol float32) {
 	if v.micHot == nil {
 		return
@@ -405,7 +425,7 @@ func (v *Visualizer) updateMicHotPulse(vol float32) {
 	v.micHot.Refresh()
 }
 
-// UpdateState обновляет индикатор уровня и заголовок окна.
+// UpdateState refreshes level meter and window title countdown.
 func (v *Visualizer) UpdateState(volume float32, secondsLeft float64) {
 	v.UpdateWave(volume)
 	if secondsLeft > 0 {
@@ -415,7 +435,7 @@ func (v *Visualizer) UpdateState(volume float32, secondsLeft float64) {
 	}
 }
 
-// SetClipboardRecognized кладёт в системный буфер только успешный текст распознавания (вызывать из любого потока).
+// SetClipboardRecognized copies successful transcription to the system clipboard (safe from any goroutine).
 func (v *Visualizer) SetClipboardRecognized(text string) {
 	if text == "" {
 		return
@@ -423,4 +443,59 @@ func (v *Visualizer) SetClipboardRecognized(text string) {
 	fyne.Do(func() {
 		v.window.Clipboard().SetContent(text)
 	})
+}
+
+func uiParseHexRGB(s string) (color.RGBA, bool) {
+	s = strings.TrimSpace(s)
+	if len(s) > 0 && s[0] == '#' {
+		s = s[1:]
+	}
+	s = strings.ToLower(s)
+	if len(s) != 6 {
+		return color.RGBA{}, false
+	}
+	var r, g, b uint8
+	n, err := fmt.Sscanf(s, "%02x%02x%02x", &r, &g, &b)
+	if err != nil || n != 3 {
+		return color.RGBA{}, false
+	}
+	return color.RGBA{R: r, G: g, B: b, A: 255}, true
+}
+
+func uiClampU8(x float32) uint8 {
+	if x < 0 {
+		return 0
+	}
+	if x > 255 {
+		return 255
+	}
+	return uint8(x)
+}
+
+func uiAccentPalette(ac color.RGBA) (innerFill, innerEdge, waveHiMid, ringBG color.RGBA) {
+	innerFill = color.RGBA{
+		R: uiClampU8(float32(ac.R) * 0.06),
+		G: uiClampU8(float32(ac.G) * 0.12),
+		B: uiClampU8(float32(ac.B) * 0.16),
+		A: 255,
+	}
+	innerEdge = color.RGBA{
+		R: uiClampU8(float32(ac.R)*0.18 + 35),
+		G: uiClampU8(float32(ac.G)*0.25 + 50),
+		B: uiClampU8(float32(ac.B)*0.35 + 55),
+		A: 255,
+	}
+	waveHiMid = color.RGBA{
+		R: uiClampU8(float32(ac.R)*0.5 + 70),
+		G: uiClampU8(float32(ac.G)*0.45 + 90),
+		B: 255,
+		A: 255,
+	}
+	ringBG = color.RGBA{
+		R: uiClampU8(float32(ac.R)*0.12 + 22),
+		G: uiClampU8(float32(ac.G)*0.17 + 38),
+		B: uiClampU8(float32(ac.B)*0.22 + 48),
+		A: 210,
+	}
+	return innerFill, innerEdge, waveHiMid, ringBG
 }

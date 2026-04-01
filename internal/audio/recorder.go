@@ -11,13 +11,17 @@ import (
 type Recorder struct {
 	ctx         *malgo.AllocatedContext
 	device      *malgo.Device
+	sampleRate  int
 	Samples     []float32
 	IsRecording bool
-	mu          sync.Mutex // Защищает Samples и IsRecording
+	mu          sync.Mutex // Protects Samples and IsRecording.
 }
 
-func NewRecorder() (*Recorder, error) {
-	r := &Recorder{}
+func NewRecorder(sampleRate int) (*Recorder, error) {
+	if sampleRate <= 0 {
+		sampleRate = 16000
+	}
+	r := &Recorder{sampleRate: sampleRate}
 
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
@@ -28,7 +32,7 @@ func NewRecorder() (*Recorder, error) {
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatF32
 	deviceConfig.Capture.Channels = 1
-	deviceConfig.SampleRate = 16000
+	deviceConfig.SampleRate = uint32(sampleRate)
 
 	onRec := func(pOutput, pInput []byte, frameCount uint32) {
 		r.mu.Lock()
@@ -72,15 +76,15 @@ func bytesToFloat32(p []byte) []float32 {
 	return out
 }
 
-// BeginSession очищает буфер и включает запись в колбэке.
+// BeginSession clears the buffer and enables capture in the device callback.
 func (r *Recorder) BeginSession() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.Samples = make([]float32, 0, 16000*10)
+	r.Samples = make([]float32, 0, r.sampleRate*10)
 	r.IsRecording = true
 }
 
-// EndSession выключает запись и возвращает копию накопленных сэмплов.
+// EndSession stops capture and returns a copy of accumulated samples.
 func (r *Recorder) EndSession() []float32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -90,14 +94,14 @@ func (r *Recorder) EndSession() []float32 {
 	return out
 }
 
-// Clear чистит буфер перед новой записью.
+// Clear resets the sample buffer before a new session.
 func (r *Recorder) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.Samples = make([]float32, 0, 16000*10)
+	r.Samples = make([]float32, 0, r.sampleRate*10)
 }
 
-// GetRMS возвращает текущий уровень громкости (Root Mean Square).
+// GetRMS returns the current loudness (root mean square) over a short tail window.
 func (r *Recorder) GetRMS() float32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -106,7 +110,10 @@ func (r *Recorder) GetRMS() float32 {
 		return 0
 	}
 
-	window := 1600 // ~100 ms при 16 kHz
+	window := r.sampleRate / 10 // ~100 ms
+	if window < 1 {
+		window = 1600
+	}
 	n := len(r.Samples)
 	if n < window {
 		return 0
@@ -119,7 +126,7 @@ func (r *Recorder) GetRMS() float32 {
 	return float32(math.Sqrt(float64(sum / float32(window))))
 }
 
-// GetData возвращает копию накопленных данных для передачи в Whisper.
+// GetData returns a copy of accumulated samples (for passing to the engine).
 func (r *Recorder) GetData() []float32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()

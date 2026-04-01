@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"unsafe"
+
+	"lnx-voice-in-go/internal/config"
 )
 
 var (
@@ -23,16 +25,18 @@ var (
 	whisperInitErr error
 )
 
-// Process распознаёт PCM mono float32 @ 16 kHz через whisper_full.
-// Путь к модели: WHISPER_MODEL (по умолчанию models/ggml-small.bin).
-// Язык: WHISPER_LANG (по умолчанию auto). GPU: по умолчанию из whisper; WHISPER_USE_GPU=0 — только CPU.
-// Отладка цепочки без модели: VOICE_ECHO_STUB=1.
+// Process transcribes mono float32 PCM via whisper_full (16 kHz expected; see audio.sample_rate in config).
+// Model path, language, and GPU come from config.yaml plus VOICE_* env; legacy WHISPER_* still supported. Debug without model: VOICE_ECHO_STUB=1.
 func Process(samples []float32) string {
 	if len(samples) == 0 {
 		return ""
 	}
+	sr := float64(config.AppConfig.Audio.SampleRate)
+	if sr <= 0 {
+		sr = 16000
+	}
 	if os.Getenv("VOICE_ECHO_STUB") != "" {
-		sec := float64(len(samples)) / 16000
+		sec := float64(len(samples)) / sr
 		return fmt.Sprintf("echo-test %.1fs ", sec)
 	}
 
@@ -50,7 +54,7 @@ func Process(samples []float32) string {
 	params.print_realtime = C.bool(false)
 	params.print_timestamps = C.bool(false)
 
-	lang := os.Getenv("WHISPER_LANG")
+	lang := config.AppConfig.Model.Lang
 	if lang == "" {
 		lang = "auto"
 	}
@@ -85,16 +89,16 @@ func ensureCtxLocked() (*C.struct_whisper_context, error) {
 		return whisperCtx, nil
 	}
 
-	path := os.Getenv("WHISPER_MODEL")
+	path := config.AppConfig.Model.Path
 	if path == "" {
-		path = "models/ggml-medium.bin"
+		path = "models/ggml-small.bin"
 	}
 
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 
 	cparams := C.whisper_context_default_params()
-	if os.Getenv("WHISPER_USE_GPU") == "0" {
+	if !config.AppConfig.Model.UseGPU {
 		cparams.use_gpu = C.bool(false)
 	}
 
@@ -115,7 +119,11 @@ func CheckCUDA() {
 	params := C.whisper_context_default_params()
 	params.use_gpu = C.bool(true)
 
-	modelPath := C.CString("models/ggml-small.bin")
+	mp := config.AppConfig.Model.Path
+	if mp == "" {
+		mp = "models/ggml-small.bin"
+	}
+	modelPath := C.CString(mp)
 	defer C.free(unsafe.Pointer(modelPath))
 
 	ctx := C.whisper_init_from_file_with_params(modelPath, params)

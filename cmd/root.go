@@ -26,10 +26,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"lnx-voice-in-go/internal/audio"
+	"lnx-voice-in-go/internal/config"
 	"lnx-voice-in-go/internal/engine"
 	"lnx-voice-in-go/internal/input"
 	"lnx-voice-in-go/internal/ui"
 )
+
+var rootConfigPath string
 
 var whisperSelftestCmd = &cobra.Command{
 	Use:   "whisper-selftest",
@@ -50,14 +53,23 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		rec, err := audio.NewRecorder()
+		sr := config.AppConfig.Audio.SampleRate
+		if sr != 16000 {
+			fmt.Fprintf(os.Stderr, "voice: warning: Whisper expects 16 kHz PCM; audio.sample_rate=%d may hurt recognition quality.\n", sr)
+		}
+
+		rec, err := audio.NewRecorder(sr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "microphone unavailable: %v\n", err)
 			os.Exit(1)
 		}
 
 		vis := ui.NewOverlay()
-		const maxRecord = 60 * time.Second
+		maxSec := config.AppConfig.Audio.MaxDurationSec
+		if maxSec <= 0 {
+			maxSec = 60
+		}
+		maxRecord := time.Duration(maxSec) * time.Second
 
 		var sess struct {
 			mu        sync.Mutex
@@ -101,18 +113,31 @@ to quickly create a Cobra application.`,
 						return
 					}
 					if text == "" {
-						fmt.Fprintf(os.Stderr, "voice: whisper returned empty text (~%.2f s PCM). Language: see WHISPER_LANG.\n", float64(len(samples))/16000)
+						fmt.Fprintf(os.Stderr, "voice: whisper returned empty text (~%.2f s PCM). Language: set model.lang in config or WHISPER_LANG.\n",
+							float64(len(samples))/float64(sr))
 						return
 					}
 
 					fmt.Fprintf(os.Stderr, "voice: transcribed %q\n", text)
-					vis.SetClipboardRecognized(text)
+					if config.AppConfig.UI.ShowResult {
+						vis.SetClipboardRecognized(text)
+					}
 					input.Type(text)
 				}()
 			}
 		}
 
 		vis.SetOnRecordToggle(toggleRecording)
+
+		hkey := strings.ToLower(strings.TrimSpace(config.AppConfig.Audio.Hotkey))
+		if hkey == "" {
+			hkey = "f12"
+		}
+		go func() {
+			input.ListenHotkey(hkey, func() {
+				fyne.Do(toggleRecording)
+			})
+		}()
 
 		uiTicker := time.NewTicker(30 * time.Millisecond)
 		go func() {
@@ -157,15 +182,11 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.PersistentFlags().StringVar(&rootConfigPath, "config", "", "path to config YAML (else: . , ~/.voice-input , ~/.config/lnx-voice-in-go)")
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		return config.LoadConfig(rootConfigPath)
+	}
+
 	rootCmd.AddCommand(whisperSelftestCmd)
-
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.lnx-voice-in-go.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
