@@ -56,6 +56,37 @@ func (m *micTap) Tapped(_ *fyne.PointEvent) {
 
 var _ fyne.Tappable = (*micTap)(nil)
 
+// windowDragLayer: full-cell transparent surface to move the window (below mic stack); mic stays tappable above.
+type windowDragLayer struct {
+	widget.BaseWidget
+	bg  *canvas.Rectangle
+	win fyne.Window
+}
+
+func newWindowDragLayer(win fyne.Window) *windowDragLayer {
+	d := &windowDragLayer{win: win}
+	d.bg = canvas.NewRectangle(color.NRGBA{A: 0})
+	d.bg.StrokeWidth = 0
+	d.bg.SetMinSize(fyne.NewSize(waveViewSize, waveViewSize))
+	d.ExtendBaseWidget(d)
+	return d
+}
+
+func (d *windowDragLayer) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(d.bg)
+}
+
+func (d *windowDragLayer) Dragged(e *fyne.DragEvent) {
+	if d.win == nil {
+		return
+	}
+	moveFyneWindowBy(d.win, e.Dragged.DX, e.Dragged.DY)
+}
+
+func (d *windowDragLayer) DragEnd() {}
+
+var _ fyne.Draggable = (*windowDragLayer)(nil)
+
 type Visualizer struct {
 	window        fyne.Window
 	wave          *canvas.Raster
@@ -141,7 +172,8 @@ func NewOverlay() *Visualizer {
 
 	recTop := container.NewHBox(layout.NewSpacer(), v.recDot)
 	micBlock := container.NewBorder(recTop, nil, nil, nil, micPile)
-	waveStack := container.NewStack(v.wave, container.NewCenter(micBlock))
+	dragPad := newWindowDragLayer(w)
+	waveStack := container.NewStack(v.wave, dragPad, container.NewCenter(micBlock))
 
 	w.SetContent(waveStack)
 	return v

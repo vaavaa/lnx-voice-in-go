@@ -7,9 +7,9 @@ BINARY_NAME = lnx-voice-in-go
 
 all: build-whisper build-go
 
-# Заголовки для CGO: gohook (xkbcommon, Xlib-xcb), glfw (Xrandr, …). Выполните: make deps-apt
+# Заголовки для CGO: gohook (xkbcommon, Xlib-xcb), glfw (Xrandr, …); плюс xdotool для перетаскивания оверлея. Выполните: make deps-apt
 deps-apt:
-	sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxrandr-dev libxcursor-dev libx11-dev libgl1-mesa-dev libxi-dev libxinerama-dev libxxf86vm-dev pkg-config xorg-dev
+	sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxrandr-dev libxcursor-dev libx11-dev libgl1-mesa-dev libxi-dev libxinerama-dev libxxf86vm-dev pkg-config xorg-dev xdotool
 
 # 1. Сборка ядра Whisper с поддержкой CUDA
 build-whisper:

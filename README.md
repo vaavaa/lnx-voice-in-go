@@ -8,7 +8,7 @@ Full technical write-ups: **[English](README.en.md)** · **[Русский](READ
 
 ## What it looks like
 
-The app is a small **desktop overlay**, not a full-screen program. The screenshot shows the usual layout while dictating: mic level, recording controls, and the live visualization. Transcribed text is **injected into the focused input** (chat, editor, browser form, etc.) where your cursor is.
+The app is a small **desktop overlay**, not a full-screen program. The screenshot shows the usual layout while dictating: mic level, recording controls, and the live visualization. Transcribed text is **injected into the focused input** (chat, editor, browser form, etc.) where your cursor is. On **Linux/X11**, you can **reposition** the overlay by dragging anywhere **except** the mic icon; that feature uses **`xdotool`** (may not work on plain Wayland — see [README.ru.md](README.ru.md) / [README.en.md](README.en.md)).
 
 ![lnx-voice-in-go overlay: mic level, recording, and rim visualization](assets/images/form-screenshot.png)
 

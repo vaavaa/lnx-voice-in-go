@@ -19,6 +19,7 @@ This is not a cloud service or a full‑featured “voice assistant.” The poin
 | **whisper.cpp** (submodule `third_party/whisper`) | Transcription via CGO (`whisper_full`) |
 | **gohook** | Global hotkey from `audio.hotkey` in config (`internal/input`) |
 | **ydotool** | Injects keystrokes into the focused widget |
+| **xdotool** | Moves the draggable overlay window (everything **except** the mic icon hit area; Linux/X11 — see **Requirements**) |
 
 Go module: `lnx-voice-in-go`. Sources: `cmd/`, `internal/audio`, `internal/engine`, `internal/input`, `internal/ui`, `assets/`.
 
@@ -28,8 +29,9 @@ Go module: `lnx-voice-in-go`. Sources: `cmd/`, `internal/audio`, `internal/engin
 - **Whisper build**: CMake, C++ toolchain; for the Makefile’s target config — **NVIDIA CUDA** and a matching GPU architecture (the sample uses `-DCMAKE_CUDA_ARCHITECTURES=89`; change it for your hardware).
 - **Go build**: a working **Go toolchain**; **CGO** on; linking pulls whisper/ggml and CUDA (see `#cgo LDFLAGS` in `internal/engine/whisper.go`).
 - **Typing**: **`ydotool`** installed, plus uinput permissions where required (often on Wayland; see your distro docs).
+- **Moving the overlay**: **`xdotool`** on your `PATH` (e.g. distro package `xdotool`). Window dragging uses it and targets **X11**; on **plain Wayland** it may do nothing (environment limitation); recording and other features still work.
 
-Ubuntu/Debian dev packages for the X11/CGO stack (from this repo):
+Ubuntu/Debian dev packages for the X11/CGO stack (from this repo). Install **`xdotool`** with the same command or separately if you need drag-to-move:
 
 ```bash
 make deps-apt
@@ -60,6 +62,8 @@ Output binary: **`lnx-voice-in-go`**. Remove CMake artifacts and the binary: `ma
 **Non‑CUDA** builds or different CMake options require your own `cmake` setup under `third_party/whisper` and edits to `#cgo` in `internal/engine/whisper.go` to match your library set (CPU-only, other ggml backends, etc.).
 
 ## Run
+
+You can **drag** the overlay by clicking anywhere **except** the mic icon (the icon only toggles recording). That needs **`xdotool`** installed; see **Requirements**.
 
 ```bash
 ./lnx-voice-in-go
